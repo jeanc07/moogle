@@ -452,3 +452,22 @@ $RECYCLE.BIN/
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+
+##
+## Latex project
+##
+
+Inform.aux
+Inform.bbl
+Inform.fdb_latexmk
+Inform.fls
+Inform.synctex.gz
+Inform.toc
+presentation.aux
+presentation.fdb_latexmk
+presentation.fls
+presentation.nav
+presentation.out
+presentation.snm
+presentation.synctex.gz
+presentation.toc
