@@ -54,11 +54,13 @@ public static class Moogle
 
         List<string> tmpPrioridad = new List<string>();  
         List<string> termsDistancia = new List<string>(); 
+        //Parseando el query y quitando palabras sin relevancia.
         query = query.Trim();
         tempquery = BuildQuery(query);
         tempquery = tempquery.Trim();
         termsquery = tempquery.Split(new char[] {'(',')',',',';','"','.','?','-', ' ','\0','\n'})
-        .Distinct().Where( d => !SplitList(d)).ToList<string>();
+        .Distinct().Where( d => !ComputeSnippets.SplitList(d)).ToList<string>();
+        //Separando el operador de prioridad en caso de su uso.
         for (int i = 0; i < termsquery.Count; i++)
         {
             tmpPrioridad = termsquery[i].Split(new char[] {'*'}).ToList<string>(); 
@@ -69,7 +71,7 @@ public static class Moogle
 
             termsquery[i] = tmpPrioridad[tmpPrioridad.Count-1].ToLower();
         }
-
+        //Separando el operador de distancia en caso de su uso para el calculo del score.
         termsDistancia = query.Split(new char[] {'~'}).ToList<string>();
         List<string> tmp1 = new List<string>();
         List<string> tmp2 = new List<string>();
@@ -78,9 +80,9 @@ public static class Moogle
             for (int i = 0; i < termsDistancia.Count - 1; i++)
             {
                 tmp1 = termsDistancia[i].Split(new char[] {'(',')',',',';','"','.','?','-', ' ','\0','\n'})
-                .Distinct().Where( d => !SplitList(d)).ToList<string>();
+                .Distinct().Where( d => !ComputeSnippets.SplitList(d)).ToList<string>();
                 tmp2 = termsDistancia[i+1].Split(new char[] {'(',')',',',';','"','.','?','-', ' ','\0','\n'})
-                .Distinct().Where(d => !SplitList(d)).ToList<string>();
+                .Distinct().Where(d => !ComputeSnippets.SplitList(d)).ToList<string>();
                 dictDistancia.Add(tmp1[0].ToLower(), tmp2[tmp2.Count-1].ToLower());
                 dictDistancia.Add(tmp2[tmp2.Count-1].ToLower(), tmp1[0].ToLower());
             }
@@ -89,23 +91,27 @@ public static class Moogle
         {
             termsDistancia.Remove("");
         }
-
-        score = computeScore(sourcepath, query, termsquery, dictDistancia, dictPrioridad, dictTempsnippet, dictTF_IDF);
+        //LLamada al método para calcular el score de los documentos.
+        score = computeScores.computeScore(sourcepath, query, termsquery, dictDistancia, dictPrioridad, dictTempsnippet, dictTF_IDF);
+        //LLamada al método para la construcción de la clase DocsFinal que almacena
+        //la información de cada documento para después armar los items.
         docs = doRanking(dictTF_IDF, score, dictTempsnippet);
 
         SearchItem[] items = new SearchItem[docs.Count()];
 
         for(int i = docs.Count-1; i >= 0; i--) 
         {
+            //Se arman los items para después devolverlos.
             if(docs[i].Frases.Count() > 0)
                 items[i] = new SearchItem(docs[i].filename ,docs[i].Frases[0], docs[i].score);
             else 
                 items[i] = new SearchItem(docs[i].filename ,"", docs[i].score);
 
         }
+        //Si en la búsqueda no se encuentra nada entonces se pasa a la construcción de items con frases parecidas.
         if (docs.Count() == 0)
         {
-            score = computeScoreLevensh(sourcepath, query, termsquery, dictDistancia, dictPrioridad, dictTempsnippet, dictTF_IDF);
+            score = computeScores.computeScoreLevensh(sourcepath, query, termsquery, dictDistancia, dictPrioridad, dictTempsnippet, dictTF_IDF);
             docs = doRanking(dictTF_IDF, score, dictTempsnippet);
             SearchItem[] items2 = new SearchItem[docs.Count()];
             for(int i = docs.Count-1; i >= 0; i--) 
@@ -117,8 +123,9 @@ public static class Moogle
 
             }
             items = items2;
+            suggestion = Levenshtein.Suggestion();
         }
-
+        //Si no se encuentra nada se devuelve lo que aparece a continuación. 
         if (docs.Count() <= 0)
         {
             SearchItem[] items1 = new SearchItem[1];
@@ -128,321 +135,13 @@ public static class Moogle
         return new SearchResult(items , suggestion);
     }
     
-    public static int numerosDocs(string word, string sourcepath)
-    {
-        int count = 0;
-        var arrayDirectory = Directory.EnumerateFiles(sourcepath);
-        foreach(var file in arrayDirectory)
-        {
-            string filecontent = File.ReadAllText(file);
-            if (filecontent.ToLower().Contains(word))
-            {      
-                count++;
-            }
-        }
-
-        return count;
-    }
-
-    public static int DamerauLevenshteinDistance(string string1, string string2, int threshold)
-    {
-        if (string1.Equals(string2))
-            return 0;
-
-        if (string.IsNullOrEmpty(string1) || string.IsNullOrEmpty(string2))
-            return (string1 ?? "").Length + (string2 ?? "").Length;
-
-
-        if (string1.Length > string2.Length)
-        {
-            var tmp = string1;
-            string1 = string2;
-            string2 = tmp;
-        }
-
-        if (string2.Contains(string1))
-            return string2.Length - string1.Length;
-
-        var length1 = string1.Length;
-        var length2 = string2.Length;
-
-        var d = new int[length1 + 1, length2 + 1];
-
-        for (var i = 0; i <= d.GetUpperBound(0); i++)
-            d[i, 0] = i;
-
-        for (var i = 0; i <= d.GetUpperBound(1); i++)
-            d[0, i] = i;
-
-        for (var i = 1; i <= d.GetUpperBound(0); i++)
-        {
-            var im1 = i - 1;
-            var im2 = i - 2;
-            var minDistance = threshold;
-
-            for (var j = 1; j <= d.GetUpperBound(1); j++)
-            {
-                var jm1 = j - 1;
-                var jm2 = j - 2;
-                var cost = string1[im1] == string2[jm1] ? 0 : 1;
-
-                var del = d[im1, j] + 1;
-                var ins = d[i, jm1] + 1;
-                var sub = d[im1, jm1] + cost;
-
-                d[i, j] = del <= ins && del <= sub ? del : ins <= sub ? ins : sub;
-
-                if (i > 1 && j > 1 && string1[im1] == string2[jm2] && string1[im2] == string2[jm1])
-                    d[i, j] = Math.Min(d[i, j], d[im2, jm2] + cost);
-
-                if (d[i, j] < minDistance)
-                    minDistance = d[i, j];
-            }
-
-            if (minDistance > threshold)
-                return int.MaxValue;
-        }
-
-        return d[d.GetUpperBound(0), d.GetUpperBound(1)] > threshold 
-            ? int.MaxValue 
-            : d[d.GetUpperBound(0), d.GetUpperBound(1)];
-    }
-    
-    public static bool Calculatequery(string query, string frase)
-    {
-        double difference = Math.Abs(frase.Length - query.Length);
-        double val = DamerauLevenshteinDistance(query , frase , 3) ;
-
-        if(frase.Length >= query.Length/2)
-        {
-            if(val <= difference + 0.25)
-            {
-                if(val < minDistance)
-                {
-                    minDistance = val;
-                    suggestion = frase;
-                }
-                    
-                return true;
-            }
-        }
-        return false;
-    }
-
-    public static double[] computeScore(string sourcepath, string query, List<string> termsquery, Dictionary<string, string> dictDistancia, 
-                                        Dictionary<string, int> dictPrioridad, Dictionary<string , List<string>> dictTempsnippet,
-                                        Dictionary<string, Dictionary<string, double>> dictTF_IDF)
-    {
-        var arrayDirectory = Directory.EnumerateFiles(sourcepath);   
-        Dictionary<string, Dictionary<string, int>> dictFrecuencia = new Dictionary<string, Dictionary<string, int>>();  
-        double [] score = new double [arrayDirectory.Count()];          
-        List<string> temp = new List<string>();   
-        List<int> fraseFrecuencia = new List<int>();   
-
-        for (int i = 0; i < termsquery.Count; i++)
-        {
-            if (termsquery[i] == "" && termsquery.Count > 1)
-                i++;
-            if(termsquery[i][0] == '*' || termsquery[i][0] == '!' || termsquery[i][0] == '^')
-                fraseFrecuencia.Add(numerosDocs(termsquery[i].Substring(1,termsquery[i].Length-1).ToLower(), sourcepath)); 
-            else
-                fraseFrecuencia.Add(numerosDocs(termsquery[i].ToLower(), sourcepath));
-        }
-
-        int count = arrayDirectory.Count();
-        for(int j = 0; j < count; j++)
-        {
-            string filecontent = File.ReadAllText(arrayDirectory.ElementAt(j));        
-            Dictionary<string, int> dictTemp = new Dictionary<string, int>();  
-            Dictionary<string, double> dictTempD = new Dictionary<string, double>();  
-            List<string> tFrases = new List<string>();
-            string [] words = filecontent.Split(new char[] {' ','(',')',',',';','"','.','!','?','-','\0','\n'});
-
-            for (int i = 0; i < termsquery.Count; i++)
-            {  
-                if(fraseFrecuencia[i] > 0 && termsquery[i] != "")  
-                {         
-                    if(termsquery[i][0] == '^' || termsquery[i][0] == '!')
-                        temp = filecontent.ToLower().Split((" "+termsquery[i].Substring(1,termsquery[i].Length-1)+" ").ToLower()).ToList<string>();
-                    else
-                        temp = filecontent.ToLower().Split((" "+termsquery[i]+" ").ToLower()).ToList<string>();    
-                    
-                    dictTemp.Add(termsquery[i], temp.Count - 1);  
-
-                    if (temp.Count == 1 && termsquery[i][0] == '^')
-                    {
-                        dictTempD.Add(termsquery[i], 0); 
-                    }
-                    else if (temp.Count > 1)
-                    {
-                        if(termsquery[i][0] == '!')
-                        {
-                            dictTempD.Add(termsquery[i], 0); 
-                        }
-                        else
-                        {
-                            List<string> phrases = filecontent.ToLower().Split(new char[] {'(',')',',',';','"','.','!','?','-', ' ','*','\0','\n'}).Distinct().Where(d => !SplitList(d)).ToList<string>();
-                            int distanciaTotal = 0;
-
-                            if(termsquery.Contains("~") && dictDistancia.Count > 1)
-                                distanciaTotal = computeDistanciaTotal(dictDistancia, filecontent, termsquery[i]);
-
-                            if(distanciaTotal > 0)
-                            {
-
-                                dictTempD.Add(termsquery[i], (1 - ((distanciaTotal*100)/(double)phrases.Count)/100) + 
-                                    (dictPrioridad.ElementAt(i).Value * (((temp.Count - 1)/(double)words.Length)*
-                                        (Math.Log10(count/(double)fraseFrecuencia[i]+1)))));    
-                            }
-                            else
-                            {                                    
-                                dictTempD.Add(termsquery[i], (dictPrioridad.ElementAt(i).Value * (((temp.Count - 1)/
-                                (double)words.Length)*(Math.Log10(count/(double)fraseFrecuencia[i]+1)))));
-                            }
-
-                            if(termsquery[i][0] == '*' || termsquery[i][0] == '^')
-                                termsquery[i] = termsquery[i].Substring(1,termsquery[i].Length-1);
-                            if(distanciaTotal  == 1)
-                            {
-                                string querytemp = computeUnion(termsquery);
-                                temp = filecontent.ToLower().Split((" "+querytemp+" ").ToLower()).ToList<string>();
-                                tFrases.Add(ComputeSnippet(temp, querytemp));
-                            }
-                            else 
-                                tFrases.Add(ComputeSnippet(temp,termsquery[i]));                       
-                        }
-                    }                      
-                }
-            }
-            dictTempsnippet.Add(Path.GetFileName(arrayDirectory.ElementAt(j)), tFrases); 
-            dictFrecuencia.Add(Path.GetFileName(arrayDirectory.ElementAt(j)), dictTemp);  
-            dictTF_IDF.Add(Path.GetFileName(arrayDirectory.ElementAt(j)), dictTempD);     
-
-            if (filecontent.ToLower().Contains(query.ToLower()))
-            {  
-                if(dictTempD.Count() > 0)
-                    score[j] = dictTempD.Values.Max()*dictTempD.Count();
-                else          
-                    score[j] = 0;
-            }
-        }         
-
-
-        return score;
-    }
-
-    static string computeUnion(List<string> termsquery)
-    {
-        string terms = "";
-        string [] symbols = new string [] {"!", "~", "^", "*"};
-
-        for (int i = 0; i < termsquery.Count - 1; i++)
-        {
-            if(!symbols.Contains(termsquery[i]))
-                terms+=(termsquery[i] + " ");   
-        }
-
-        if(!symbols.Contains(termsquery[termsquery.Count - 1]))
-            terms+=(termsquery[termsquery.Count - 1]);         
-
-        return terms;
-    }
-
-    public static double[] computeScoreLevensh(string sourcepath, string query, List<string> termsquery, Dictionary<string, string> dictDistancia, 
-                                        Dictionary<string, int> dictPrioridad, Dictionary<string , List<string>> dictTempsnippet,
-                                        Dictionary<string, Dictionary<string, double>> dictTF_IDF)
-    {
-        var arrayDirectory = Directory.EnumerateFiles(sourcepath);   //Directorio donde estan los archivos de texto
-        Dictionary<string, Dictionary<string, int>> dictFrecuencia = new Dictionary<string, Dictionary<string, int>>();  
-        double [] score = new double [arrayDirectory.Count()];          
-        List<string> temp = new List<string>();   // Texto sin el query y sin palabras parecidas
-        List<int> fraseFrecuencia = new List<int>();   // Cantidad de documentos en los que esta el query
-        dictTempsnippet.Clear();
-        dictTF_IDF.Clear();
-        dictFrecuencia.Clear();
-
-        int count = arrayDirectory.Count();
-        for(int j = 0; j < count; j++)
-        {
-            string filecontent = File.ReadAllText(arrayDirectory.ElementAt(j));        
-            Dictionary<string, int> dictTemp = new Dictionary<string, int>();  
-            Dictionary<string, double> dictTempD = new Dictionary<string, double>();  
-            List<string> tFrases = new List<string> (); 
-            //fraseFrecuencia.Clear();
-            string [] words = filecontent.Split(new char[] {' ','(',')',',',';','"','.','!','?','-'});
-
-
-            for (int i = 0; i < termsquery.Count; i++)
-            {
-                if(termsquery[i] != "")
-                {
-                    if (termsquery[i][0] == '^' && temp.Count() == 1)
-                    {
-                        dictTempD.Add(termsquery[i], 0);
-                    }
-                    if (termsquery[i][0] != '^')
-                    {
-                        string[] totalPhrases = filecontent.ToLower().Split(new char[] { '(', ')', ',', ';', '"', '.', '!', '?', '-', ' ' })
-                        .Distinct().Where(d => !SplitList(d)).ToArray<string>();
-                        string[] phrases = filecontent.ToLower().Split(new char[] { '(', ')', ',', ';', '"', '.', '!', '?', '-', ' ' })
-                        .Distinct().Where(d => !SplitList(d) && Calculatequery(termsquery[i].ToLower(), d)).ToArray<string>();
-
-                        if (termsquery[i][0] == '^' || termsquery[i][0] == '!' || termsquery[i][0] == '*')
-                        {
-                            phrases = filecontent.ToLower().Split(new char[] { '(', ')', ',', ';', '"', '.', '!', '?', '-', ' ' })
-                            .Distinct().Where(d => !SplitList(d) && Calculatequery(termsquery[i].Substring(1, termsquery[i].Length - 1).ToLower(), d)).ToArray<string>();
-                            if (phrases.Count() > 0)
-                                temp = filecontent.ToLower().Split(" " + phrases[0] + " ").ToList<string>();
-                        }
-                        if (phrases.Count() > 0)
-                        {
-                            int index = 0;
-                            fraseFrecuencia.Add(numerosDocs(phrases[0], sourcepath));
-                            if (fraseFrecuencia[i] == 0)
-                            {
-                                index = i + 1;
-                            }
-                            if (termsquery[i][0] == '!' && temp.Count() > 1)
-                            {
-                                dictTempD.Add(termsquery[i], 0);
-                            }
-                            else if (termsquery[i][0] == '^' && temp.Count() == 1)
-                            {
-                                dictTempD.Add(termsquery[i], 0);
-                            }
-                            else
-                            {
-                                temp = filecontent.ToLower().Split(" " + phrases[0] + " ").ToList<string>();
-                                dictTemp.Add(termsquery[i], temp.Count() - 1);
-                                dictTempD.Add(termsquery[i], ((temp.Count - 1) / ((double)totalPhrases.Length)) *
-                                (Math.Log10(count / (double)fraseFrecuencia[index] + 1)));
-                                tFrases.Add(ComputeSnippet(temp, phrases[0]));
-                            }
-
-                        }
-                    }
-                    else
-                    {
-                        dictTempD.Add(termsquery[i], 0);
-                    }
-                }
-            }
-                
-            dictTempsnippet.Add(Path.GetFileName(arrayDirectory.ElementAt(j)), tFrases);  
-            dictFrecuencia.Add(Path.GetFileName(arrayDirectory.ElementAt(j)), dictTemp);  
-            dictTF_IDF.Add(Path.GetFileName(arrayDirectory.ElementAt(j)), dictTempD);     
-
-            if (filecontent.ToLower().Contains(query.ToLower()))
-            {  
-                if(dictTempD.Count() > 0)
-                    score[j] = dictTempD.Values.Max()*dictTempD.Count();
-                else          
-                    score[j] = 0;
-            }
-        }            
-        return score;
-    }
-
+    /// <summary>
+    /// Método donde se realiza el cálculo del operador de Distancia (~).
+    /// </summary>
+    /// <param name="dictDistancia"></param>
+    /// <param name="content"></param>
+    /// <param name="termsquery"></param>
+    /// <returns></returns>
     public static int computeDistanciaTotal(Dictionary<string, string> dictDistancia, string content, string termsquery)
     {
         int distanciaTotal = 999999;
@@ -473,67 +172,13 @@ public static class Moogle
 
         return distanciaTotal;
     }
-
-    static string ComputeSnippet(List<string> temp, string query)
-    {
-        string result = "";
-        string querytemp = query;
-        string textafterquery = querytemp;
-        string textbeforequery = "";
-        int count = 0;
-        if (temp.Count > 1)
-        {
-            string[] phrases1 = temp[0].Split(new char[] {' '});
-            string[] phrases2 = temp[1].Split(new char[] {' '});
-            if(phrases1.Length > 25 && phrases2.Length > 25) 
-            {
-                for (int i = 0; i < 25; i++)
-                {
-                    textafterquery+= " " + phrases2[i];
-                }
-                for (int i = phrases1.Length - 1; i >= 0 && count != 25; i--)
-                {
-                    textbeforequery = phrases1[i] + " " + textbeforequery;
-                    count++;
-                }
-            }else if(phrases1.Length < 25 && phrases2.Length > 25)
-            {
-                for (int i = 0; i < 25; i++)
-                {
-                    textafterquery+= " " + phrases2[i];
-                }
-                for (int i = phrases1.Length - 1; i >= 0; i--)
-                {
-                    textbeforequery = phrases1[i] + " " + textbeforequery;
-                }
-            }else if(phrases1.Length > 25 && phrases2.Length < 25)
-            {
-                for (int i = 0; i < phrases2.Length-1; i++)
-                {
-                    textafterquery+= " " + phrases2[i];
-                }
-                for (int i = phrases1.Length - 1; i >= 0 && count != 25; i--)
-                {
-                    textbeforequery = phrases1[i] + " " + textbeforequery;
-                    count++;
-                }
-            }
-            else
-            {
-                for (int i = 0; i < phrases2.Length-1; i++)
-                {
-                    textafterquery+= " " + phrases2[i];
-                }
-                for (int i = phrases1.Length - 1; i >= 0; i--)
-                {
-                    textbeforequery = phrases1[i] + " " + textbeforequery;
-                }
-            }
-            result = textbeforequery + textafterquery;
-        }
-        return result;
-    }
-
+    /// <summary>
+    /// Método donde se almacenan los datos de cada documento en la clase DocsFinal.
+    /// </summary>
+    /// <param name="dictTF_IDF"></param>
+    /// <param name="score"></param>
+    /// <param name="dictTempsnippet"></param>
+    /// <returns></returns>
     public static List<DocsFinal> doRanking(Dictionary<string, Dictionary<string, double>> dictTF_IDF,
                                             double [] score, Dictionary<string , List<string>> dictTempsnippet)
     {
@@ -580,31 +225,17 @@ public static class Moogle
         
         return docs;
     }
-
-    public static bool SplitList(string filecontent)  
-    {
-        bool result = false;
-        string[] tokens = {"a","ante","con","contra","de","desde","en","entre",
-        "para","por","según","sin","sobre","tras","y","e","ni","que","o","u","yo",
-        "tu","el","ella","nosotros","ustedes","vosotros","ellos","ellas","la","las","lo","los","uno",
-        "una","unos","unas","es","un","su","se"};
-        string[] filecontentemp = filecontent.Split(new char[] {' '});
-        for (int i = 0; i < tokens.Length; i++)
-        {
-            if (filecontentemp.Contains(tokens[i]))
-            {
-                result = true;
-            }
-        }
-        
-        return result;
-    }
+    /// <summary>
+    /// Método se parsea el query para eliminar espacios innecesarios.
+    /// </summary>
+    /// <param name="query"></param>
+    /// <returns></returns>
     public static string BuildQuery(string query)
     {
         string res = "";
         List<string> result = new List<string>();
         result = query.Split(new char[] { '(', ')', ',', ';', '"', '.', '?', '-', ' ', '\0', '\n' })
-        .Distinct().Where(d => !SplitList(d)).ToList<string>();
+        .Distinct().Where(d => !ComputeSnippets.SplitList(d)).ToList<string>();
         if (result.Count() == 1)
             return result.ElementAt(0);
         for (int i = 0; i < result.Count(); i++)
